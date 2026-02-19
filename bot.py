@@ -228,18 +228,14 @@ async def today(update, context):
     """Показывает выбор дня тренировки"""
     data, uid = get_user_data(update.effective_user.id)
     plan_key, plan = get_plan(data, uid)
-    next_day = data[uid].get("next_day", 1)
 
     keyboard = []
     for day_num in sorted(plan["days"].keys()):
         day_data = plan["days"][day_num]
-        title = day_data["title"]
-        if day_num == next_day:
-            title = f"⭐ {title}"
-        keyboard.append([InlineKeyboardButton(title, callback_data=f"startday_{day_num}")])
+        keyboard.append([InlineKeyboardButton(day_data["title"], callback_data=f"startday_{day_num}")])
 
     await update.message.reply_text(
-        "🏋️ *Выбери тренировку:*\n_(⭐ = следующая по плану)_",
+        "🏋️ *Выбери тренировку:*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -365,13 +361,6 @@ async def finish_workout_callback(update, context):
 
     data[uid]["workout_log"].append(workout_entry)
 
-    # Следующий день по ротации
-    rotation = plan.get("rotation", list(plan["days"].keys()))
-    current_idx = data[uid].get("rotation_idx", 0)
-    next_idx = (current_idx + 1) % len(rotation)
-    data[uid]["rotation_idx"] = next_idx
-    data[uid]["next_day"] = rotation[next_idx]
-
     # Очищаем текущую тренировку
     data[uid]["current_workout"] = {}
     if "pending_exercise" in data[uid]:
@@ -379,7 +368,6 @@ async def finish_workout_callback(update, context):
     save_data(data)
 
     total = len(data[uid]["workout_log"])
-    next_title = plan["days"][data[uid]["next_day"]]["title"]
 
     # Формируем итог
     text = f"🎉 *Тренировка завершена!*\n\n"
@@ -390,8 +378,7 @@ async def finish_workout_callback(update, context):
         result = logged.get(str(i), "—")
         text += f"{'✅' if str(i) in logged else '⬜'} {ex['name']}: *{result}*\n"
 
-    text += f"\n📊 Всего тренировок: *{total}*\n"
-    text += f"➡️ Следующая: {next_title}"
+    text += f"\n📊 Всего тренировок: *{total}*"
 
     await query.edit_message_text(text, parse_mode="Markdown")
 
@@ -504,8 +491,6 @@ async def plan_callback(update, context):
         return
     data, uid = get_user_data(query.from_user.id)
     data[uid]["plan"] = plan_key
-    data[uid]["rotation_idx"] = 0
-    data[uid]["next_day"] = WORKOUT_PLANS[plan_key]["rotation"][0]
     save_data(data)
     name = WORKOUT_PLANS[plan_key]["name"]
     await query.edit_message_text(f"✅ Выбран план: *{name}*", parse_mode="Markdown")
@@ -537,22 +522,14 @@ async def quickdone_callback(update, context):
     data[uid]["workout_log"].append({
         "day": day, "name": day_title, "date": now, "exercises": {}
     })
-
-    rotation = plan.get("rotation", list(plan["days"].keys()))
-    current_idx = data[uid].get("rotation_idx", 0)
-    next_idx = (current_idx + 1) % len(rotation)
-    data[uid]["rotation_idx"] = next_idx
-    data[uid]["next_day"] = rotation[next_idx]
     save_data(data)
 
     total = len(data[uid]["workout_log"])
-    next_title = plan["days"][data[uid]["next_day"]]["title"]
 
     await query.edit_message_text(
         f"✅ *Тренировка записана!*\n\n"
         f"📅 {day_title}\n🕐 {now}\n"
-        f"📊 Всего: *{total}*\n\n"
-        f"➡️ Следующая: {next_title}",
+        f"📊 Всего: *{total}*",
         parse_mode="Markdown"
     )
 
