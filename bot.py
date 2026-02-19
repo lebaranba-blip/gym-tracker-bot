@@ -224,26 +224,48 @@ def build_exercise_keyboard(plan, day_num, logged_exercises):
     return InlineKeyboardMarkup(keyboard)
 
 async def today(update, context):
-    """Показывает тренировку дня с кнопками для записи"""
+    """Показывает выбор дня тренировки"""
     data, uid = get_user_data(update.effective_user.id)
     plan_key, plan = get_plan(data, uid)
     next_day = data[uid].get("next_day", 1)
 
-    # Создаём/очищаем текущую сессию тренировки
-    if "current_workout" not in data[uid]:
-        data[uid]["current_workout"] = {}
+    keyboard = []
+    for day_num in sorted(plan["days"].keys()):
+        day_data = plan["days"][day_num]
+        title = day_data["title"]
+        if day_num == next_day:
+            title = f"⭐ {title}"
+        keyboard.append([InlineKeyboardButton(title, callback_data=f"startday_{day_num}")])
+
+    await update.message.reply_text(
+        "🏋️ *Выбери тренировку:*\n_(⭐ = следующая по плану)_",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def startday_callback(update, context):
+    """Начинает тренировку выбранного дня"""
+    query = update.callback_query
+    await query.answer()
+    day_num = int(query.data.split("_")[1])
+
+    data, uid = get_user_data(query.from_user.id)
+    plan_key, plan = get_plan(data, uid)
+
+    # Создаём сессию тренировки
     data[uid]["current_workout"] = {
-        "day": next_day,
+        "day": day_num,
         "exercises": {},
         "started": datetime.now().strftime("%Y-%m-%d %H:%M")
     }
     save_data(data)
 
     logged = data[uid]["current_workout"]["exercises"]
-    text = build_workout_message(plan, next_day, logged)
-    keyboard = build_exercise_keyboard(plan, next_day, logged)
+    text = build_workout_message(plan, day_num, logged)
+    keyboard = build_exercise_keyboard(plan, day_num, logged)
 
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
 
 async def exercise_callback(update, context):
     """Когда пользователь нажимает на упражнение"""
@@ -571,6 +593,7 @@ def main():
     app.add_handler(CommandHandler("plan", plan))
     app.add_handler(CommandHandler("lastworkout", lastworkout))
 
+    app.add_handler(CallbackQueryHandler(startday_callback, pattern=r"^startday_\d+$"))
     app.add_handler(CallbackQueryHandler(exercise_callback, pattern=r"^ex_\d+_\d+$"))
     app.add_handler(CallbackQueryHandler(finish_workout_callback, pattern=r"^finish_\d+$"))
     app.add_handler(CallbackQueryHandler(quickdone_callback, pattern=r"^quickdone_\d+$"))
