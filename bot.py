@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -372,10 +374,33 @@ async def plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"✅ Выбран план: *{name}*", parse_mode="Markdown")
 
 # ═══════════════════════════════════════════════
+# HEALTH CHECK SERVER (для Railway)
+# ═══════════════════════════════════════════════
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Gym Tracker Bot is running!')
+    def log_message(self, format, *args):
+        pass  # тихий лог
+
+def run_health_server():
+    port = int(os.environ.get('PORT', 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    logger.info(f'Health server on port {port}')
+    server.serve_forever()
+
+# ═══════════════════════════════════════════════
 # ЗАПУСК
 # ═══════════════════════════════════════════════
 
 def main():
+    # Запускаем health-check сервер в фоне
+    t = threading.Thread(target=run_health_server, daemon=True)
+    t.start()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
