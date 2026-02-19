@@ -64,7 +64,7 @@ WORKOUT_PLANS = {
     "ulyana": {
         "name": "Ульяна 🔥",
         "total_days": 4,
-        "rotation": [1, 3, 2, 3],  # Низ А, Верх А, Низ Б, Верх А
+        "rotation": [1, 3, 2, 3],
         "days": {
             1: {
                 "title": "🟣 НИЗ А — Ягодицы + Заднее бедро",
@@ -145,7 +145,8 @@ def get_user_data(user_id):
             "plan": "dima",
             "weight_log": [],
             "workout_log": [],
-            "next_day": 1
+            "next_day": 1,
+            "rotation_idx": 0
         }
         save_data(data)
     return data, uid
@@ -154,133 +155,271 @@ def get_user_data(user_id):
 # КОМАНДЫ БОТА
 # ═══════════════════════════════════════════════
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
     user = update.effective_user
     text = (
         f"🏋️ *Gym Tracker Bot*\n"
-        f"Привет, {user.first_name}!\n"
-        f"Создатель: Дима\n\n"
+        f"Привет, {user.first_name}!\n\n"
         f"Команды:\n"
-        f"/today — Тренировка на сегодня\n"
-        f"/day1 — Толкай (Грудь, Плечи, Трицепс)\n"
-        f"/day2 — Тяни (Спина, Бицепс)\n"
-        f"/day3 — Ноги\n"
-        f"/done — Записать тренировку ✅\n"
-        f"/weight 84 — Записать вес\n"
-        f"/progress — История веса 📊\n"
-        f"/history — Журнал тренировок\n"
-        f"/plan — Выбрать план тренировок"
+        f"/today — 🏋️ Начать тренировку\n"
+        f"/done — ✅ Завершить тренировку\n"
+        f"/weight 84 — ⚖️ Записать вес\n"
+        f"/progress — 📊 История веса\n"
+        f"/history — 📋 Журнал тренировок\n"
+        f"/plan — 🔄 Выбрать план\n"
+        f"/lastworkout — 📝 Последняя тренировка"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-def format_workout(day_num, plan_key="ruslan"):
-    plan = WORKOUT_PLANS[plan_key]["days"][day_num]
-    lines = [f"*{plan['title']}*\n"]
-    for i, ex in enumerate(plan["exercises"], 1):
-        lines.append(f"{i}. {ex['name']} — *{ex['sets']}*")
-    lines.append(f"\n{plan['cardio']}")
+def get_plan(data, uid):
+    plan_key = data[uid].get("plan", "dima")
+    if plan_key not in WORKOUT_PLANS:
+        plan_key = "dima"
+    return plan_key, WORKOUT_PLANS[plan_key]
+
+# ═══════════════════════════════════════════════
+# ТРЕНИРОВКА С ЗАПИСЬЮ УПРАЖНЕНИЙ
+# ═══════════════════════════════════════════════
+
+def build_workout_message(plan, day_num, logged_exercises):
+    """Собирает сообщение тренировки с отметками выполненных упражнений"""
+    day = plan["days"][day_num]
+    lines = [f"*{day['title']}*\n"]
+
+    for i, ex in enumerate(day["exercises"], 1):
+        log = logged_exercises.get(str(i))
+        if log:
+            lines.append(f"✅ {i}. {ex['name']} — *{log}*")
+        else:
+            lines.append(f"⬜ {i}. {ex['name']} — _{ex['sets']}_")
+
+    done_count = len(logged_exercises)
+    total = len(day["exercises"])
+    lines.append(f"\n📊 Выполнено: *{done_count}/{total}*")
+
+    if day.get("cardio"):
+        lines.append(f"\n{day['cardio']}")
+
     return "\n".join(lines)
 
-async def show_day(update: Update, context: ContextTypes.DEFAULT_TYPE, day: int):
-    data, uid = get_user_data(update.effective_user.id)
-    plan_key = data[uid].get("plan", "dima")
-    if plan_key not in WORKOUT_PLANS:
-        plan_key = "dima"
-    text = format_workout(day, plan_key)
-    keyboard = [[InlineKeyboardButton(f"✅ Записать тренировку", callback_data=f"done_{day}")]]
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def day1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_day(update, context, 1)
-
-async def day2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_day(update, context, 2)
-
-async def day3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_day(update, context, 3)
-
-async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data, uid = get_user_data(update.effective_user.id)
-    next_day = data[uid].get("next_day", 1)
-    await show_day(update, context, next_day)
-
-async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data, uid = get_user_data(update.effective_user.id)
-    plan_key = data[uid].get("plan", "dima")
-    if plan_key not in WORKOUT_PLANS:
-        plan_key = "dima"
-    plan = WORKOUT_PLANS[plan_key]
+def build_exercise_keyboard(plan, day_num, logged_exercises):
+    """Кнопки для каждого упражнения + кнопка завершения"""
+    day = plan["days"][day_num]
     keyboard = []
-    for day_num, day_data in plan["days"].items():
-        title = day_data["title"]
-        keyboard.append([InlineKeyboardButton(title, callback_data=f"done_{day_num}")])
 
-    await update.message.reply_text(
-        "Какую тренировку завершил(а)?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    for i, ex in enumerate(day["exercises"], 1):
+        if str(i) not in logged_exercises:
+            # Сокращённое название для кнопки
+            short_name = ex["name"][:30]
+            keyboard.append([InlineKeyboardButton(
+                f"📝 {i}. {short_name}",
+                callback_data=f"ex_{day_num}_{i}"
+            )])
 
-async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard.append([InlineKeyboardButton(
+        "✅ Завершить тренировку",
+        callback_data=f"finish_{day_num}"
+    )])
+
+    return InlineKeyboardMarkup(keyboard)
+
+async def today(update, context):
+    """Показывает тренировку дня с кнопками для записи"""
+    data, uid = get_user_data(update.effective_user.id)
+    plan_key, plan = get_plan(data, uid)
+    next_day = data[uid].get("next_day", 1)
+
+    # Создаём/очищаем текущую сессию тренировки
+    if "current_workout" not in data[uid]:
+        data[uid]["current_workout"] = {}
+    data[uid]["current_workout"] = {
+        "day": next_day,
+        "exercises": {},
+        "started": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+    save_data(data)
+
+    logged = data[uid]["current_workout"]["exercises"]
+    text = build_workout_message(plan, next_day, logged)
+    keyboard = build_exercise_keyboard(plan, next_day, logged)
+
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+async def exercise_callback(update, context):
+    """Когда пользователь нажимает на упражнение"""
     query = update.callback_query
     await query.answer()
-    day = int(query.data.split("_")[1])
-    data, uid = get_user_data(query.from_user.id)
 
-    plan_key = data[uid].get("plan", "dima")
-    if plan_key not in WORKOUT_PLANS:
-        plan_key = "dima"
-    plan = WORKOUT_PLANS[plan_key]
+    parts = query.data.split("_")
+    day_num = int(parts[1])
+    ex_idx = int(parts[2])
+
+    data, uid = get_user_data(query.from_user.id)
+    plan_key, plan = get_plan(data, uid)
+    exercise = plan["days"][day_num]["exercises"][ex_idx - 1]
+
+    # Сохраняем контекст: какое упражнение записываем
+    data[uid]["pending_exercise"] = {
+        "day": day_num,
+        "index": ex_idx,
+        "name": exercise["name"]
+    }
+    save_data(data)
+
+    await query.message.reply_text(
+        f"📝 *{exercise['name']}*\n"
+        f"План: _{exercise['sets']}_\n\n"
+        f"Напиши результат, например:\n"
+        f"`40 12` — 40 кг, 12 повторений\n"
+        f"`3x12 40кг` — любой формат\n"
+        f"или просто текст: `без веса`",
+        parse_mode="Markdown"
+    )
+
+async def handle_exercise_input(update, context):
+    """Обрабатывает ввод веса/повторений"""
+    data, uid = get_user_data(update.effective_user.id)
+
+    pending = data[uid].get("pending_exercise")
+    if not pending:
+        return  # Нет ожидающего упражнения — игнорируем
+
+    text_input = update.message.text.strip()
+    day_num = pending["day"]
+    ex_idx = pending["index"]
+    ex_name = pending["name"]
+
+    # Сохраняем результат в текущую тренировку
+    if "current_workout" not in data[uid]:
+        data[uid]["current_workout"] = {"day": day_num, "exercises": {}, "started": datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+    data[uid]["current_workout"]["exercises"][str(ex_idx)] = text_input
+
+    # Убираем pending
+    del data[uid]["pending_exercise"]
+    save_data(data)
+
+    plan_key, plan = get_plan(data, uid)
+    logged = data[uid]["current_workout"]["exercises"]
+
+    # Обновляем сообщение с тренировкой
+    msg_text = build_workout_message(plan, day_num, logged)
+    keyboard = build_exercise_keyboard(plan, day_num, logged)
+
+    await update.message.reply_text(
+        f"✅ *{ex_name}*: {text_input}\n",
+        parse_mode="Markdown"
+    )
+    await update.message.reply_text(msg_text, parse_mode="Markdown", reply_markup=keyboard)
+
+async def finish_workout_callback(update, context):
+    """Завершает тренировку и сохраняет в лог"""
+    query = update.callback_query
+    await query.answer()
+
+    day_num = int(query.data.split("_")[1])
+    data, uid = get_user_data(query.from_user.id)
+    plan_key, plan = get_plan(data, uid)
+
+    workout = data[uid].get("current_workout", {})
+    logged = workout.get("exercises", {})
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    day_title = plan["days"][day]["title"]
+    day_title = plan["days"][day_num]["title"]
 
-    data[uid]["workout_log"].append({
-        "day": day,
+    # Сохраняем полный лог тренировки
+    workout_entry = {
+        "day": day_num,
         "name": day_title,
-        "date": now
-    })
+        "date": now,
+        "exercises": {}
+    }
+
+    # Записываем каждое упражнение с результатом
+    for i, ex in enumerate(plan["days"][day_num]["exercises"], 1):
+        result = logged.get(str(i), "—")
+        workout_entry["exercises"][ex["name"]] = result
+
+    data[uid]["workout_log"].append(workout_entry)
 
     # Следующий день по ротации
     rotation = plan.get("rotation", list(plan["days"].keys()))
     current_idx = data[uid].get("rotation_idx", 0)
     next_idx = (current_idx + 1) % len(rotation)
     data[uid]["rotation_idx"] = next_idx
-    next_day = rotation[next_idx]
-    data[uid]["next_day"] = next_day
+    data[uid]["next_day"] = rotation[next_idx]
+
+    # Очищаем текущую тренировку
+    data[uid]["current_workout"] = {}
+    if "pending_exercise" in data[uid]:
+        del data[uid]["pending_exercise"]
     save_data(data)
 
     total = len(data[uid]["workout_log"])
-    next_title = plan["days"][next_day]["title"]
+    next_title = plan["days"][data[uid]["next_day"]]["title"]
 
-    await query.edit_message_text(
-        f"✅ *Тренировка записана!*\n\n"
-        f"📅 {day_title}\n"
-        f"🕐 {now}\n"
-        f"📊 Всего тренировок: *{total}*\n\n"
-        f"➡️ Следующая: {next_title}",
-        parse_mode="Markdown"
-    )
+    # Формируем итог
+    text = f"🎉 *Тренировка завершена!*\n\n"
+    text += f"📅 {day_title}\n"
+    text += f"🕐 {now}\n\n"
 
-async def weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for i, ex in enumerate(plan["days"][day_num]["exercises"], 1):
+        result = logged.get(str(i), "—")
+        text += f"{'✅' if str(i) in logged else '⬜'} {ex['name']}: *{result}*\n"
+
+    text += f"\n📊 Всего тренировок: *{total}*\n"
+    text += f"➡️ Следующая: {next_title}"
+
+    await query.edit_message_text(text, parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════
+# ПОСЛЕДНЯЯ ТРЕНИРОВКА
+# ═══════════════════════════════════════════════
+
+async def lastworkout(update, context):
+    """Показывает подробности последней тренировки"""
+    data, uid = get_user_data(update.effective_user.id)
+    logs = data[uid].get("workout_log", [])
+
+    if not logs:
+        await update.message.reply_text("Пока нет тренировок. Жми /today! 💪")
+        return
+
+    last = logs[-1]
+    text = f"📝 *Последняя тренировка*\n\n"
+    text += f"📅 {last['name']}\n"
+    text += f"🕐 {last['date']}\n\n"
+
+    exercises = last.get("exercises", {})
+    if exercises:
+        for name, result in exercises.items():
+            text += f"• {name}: *{result}*\n"
+    else:
+        text += "_Без детальной записи_"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════
+# ВЕС И ПРОГРЕСС
+# ═══════════════════════════════════════════════
+
+async def weight(update, context):
     if not context.args:
         await update.message.reply_text("Укажи вес: `/weight 84.5`", parse_mode="Markdown")
         return
-
     try:
         w = float(context.args[0].replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Введи число, например: `/weight 84.5`", parse_mode="Markdown")
+        await update.message.reply_text("❌ Введи число: `/weight 84.5`", parse_mode="Markdown")
         return
 
     data, uid = get_user_data(update.effective_user.id)
     now = datetime.now().strftime("%Y-%m-%d")
-
     data[uid]["weight_log"].append({"weight": w, "date": now})
     save_data(data)
 
     logs = data[uid]["weight_log"]
     text = f"✅ Вес записан: *{w} кг*\n📅 {now}\n"
-
     if len(logs) >= 2:
         first = logs[0]["weight"]
         diff = w - first
@@ -289,89 +428,110 @@ async def weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def progress(update, context):
     data, uid = get_user_data(update.effective_user.id)
     logs = data[uid].get("weight_log", [])
-
     if not logs:
-        await update.message.reply_text("Пока нет записей. Введи вес: `/weight 85`", parse_mode="Markdown")
+        await update.message.reply_text("Пока нет записей. `/weight 85`", parse_mode="Markdown")
         return
 
     text = "📊 *История веса:*\n\n"
-    for entry in logs[-15:]:  # Последние 15 записей
+    for entry in logs[-15:]:
         text += f"📅 {entry['date']} — *{entry['weight']} кг*\n"
 
     first = logs[0]["weight"]
     last = logs[-1]["weight"]
     diff = last - first
     emoji = "📉" if diff < 0 else "📈" if diff > 0 else "➡️"
-
-    bar_len = 20
-    if first != last:
-        progress_pct = min(abs(diff) / first * 100, 100)
-        filled = int(bar_len * progress_pct / 100)
-    else:
-        filled = 0
-    bar = "█" * filled + "░" * (bar_len - filled)
-
-    text += f"\n{emoji} Итого: *{diff:+.1f} кг*\n"
-    text += f"[{bar}] {abs(diff):.1f} кг сброшено" if diff < 0 else f"[{bar}]"
+    text += f"\n{emoji} Итого: *{diff:+.1f} кг*"
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def history(update, context):
     data, uid = get_user_data(update.effective_user.id)
     logs = data[uid].get("workout_log", [])
-
     if not logs:
-        await update.message.reply_text("Пока нет тренировок. Сходи в зал! 💪")
+        await update.message.reply_text("Пока нет тренировок. Жми /today! 💪")
         return
 
     text = "📋 *Журнал тренировок:*\n\n"
     for entry in logs[-10:]:
-        text += f"📅 {entry['date']} — *{entry['name']}*\n"
+        ex_count = len(entry.get("exercises", {}))
+        ex_info = f" ({ex_count} упр.)" if ex_count else ""
+        text += f"📅 {entry['date']} — *{entry['name']}*{ex_info}\n"
 
-    text += f"\n📊 Всего тренировок: *{len(logs)}*"
-
-    # Статистика по типам
-    day_counts = {}
-    for entry in logs:
-        name = entry["name"]
-        day_counts[name] = day_counts.get(name, 0) + 1
-
-    text += "\n"
-    for name, count in day_counts.items():
-        text += f"\n{name}: *{count}* раз"
-
+    text += f"\n📊 Всего: *{len(logs)}* тренировок"
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    plans = list(WORKOUT_PLANS.keys())
+async def plan(update, context):
     keyboard = []
-    for key in plans:
-        p = WORKOUT_PLANS[key]
+    for key, p in WORKOUT_PLANS.items():
         keyboard.append([InlineKeyboardButton(p["name"], callback_data=f"plan_{key}")])
-
     await update.message.reply_text(
         "Выбери план тренировок:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def plan_callback(update, context):
     query = update.callback_query
     await query.answer()
     plan_key = query.data.split("_", 1)[1]
-
     if plan_key not in WORKOUT_PLANS:
         await query.edit_message_text("❌ План не найден")
         return
-
     data, uid = get_user_data(query.from_user.id)
     data[uid]["plan"] = plan_key
+    data[uid]["rotation_idx"] = 0
+    data[uid]["next_day"] = WORKOUT_PLANS[plan_key]["rotation"][0]
     save_data(data)
-
     name = WORKOUT_PLANS[plan_key]["name"]
     await query.edit_message_text(f"✅ Выбран план: *{name}*", parse_mode="Markdown")
+
+async def done_command(update, context):
+    """Быстрое завершение тренировки без записи упражнений"""
+    data, uid = get_user_data(update.effective_user.id)
+    plan_key, plan = get_plan(data, uid)
+    keyboard = []
+    for day_num in sorted(plan["days"].keys()):
+        day_data = plan["days"][day_num]
+        keyboard.append([InlineKeyboardButton(day_data["title"], callback_data=f"quickdone_{day_num}")])
+    await update.message.reply_text(
+        "Какую тренировку завершил(а)?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def quickdone_callback(update, context):
+    """Быстрая запись тренировки без деталей"""
+    query = update.callback_query
+    await query.answer()
+    day = int(query.data.split("_")[1])
+    data, uid = get_user_data(query.from_user.id)
+    plan_key, plan = get_plan(data, uid)
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    day_title = plan["days"][day]["title"]
+
+    data[uid]["workout_log"].append({
+        "day": day, "name": day_title, "date": now, "exercises": {}
+    })
+
+    rotation = plan.get("rotation", list(plan["days"].keys()))
+    current_idx = data[uid].get("rotation_idx", 0)
+    next_idx = (current_idx + 1) % len(rotation)
+    data[uid]["rotation_idx"] = next_idx
+    data[uid]["next_day"] = rotation[next_idx]
+    save_data(data)
+
+    total = len(data[uid]["workout_log"])
+    next_title = plan["days"][data[uid]["next_day"]]["title"]
+
+    await query.edit_message_text(
+        f"✅ *Тренировка записана!*\n\n"
+        f"📅 {day_title}\n🕐 {now}\n"
+        f"📊 Всего: *{total}*\n\n"
+        f"➡️ Следующая: {next_title}",
+        parse_mode="Markdown"
+    )
 
 # ═══════════════════════════════════════════════
 # HEALTH CHECK SERVER (для Railway)
@@ -384,7 +544,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'Gym Tracker Bot is running!')
     def log_message(self, format, *args):
-        pass  # тихий лог
+        pass
 
 def run_health_server():
     port = int(os.environ.get('PORT', 8080))
@@ -397,7 +557,6 @@ def run_health_server():
 # ═══════════════════════════════════════════════
 
 def main():
-    # Запускаем health-check сервер в фоне
     t = threading.Thread(target=run_health_server, daemon=True)
     t.start()
 
@@ -405,17 +564,20 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today))
-    app.add_handler(CommandHandler("day1", day1))
-    app.add_handler(CommandHandler("day2", day2))
-    app.add_handler(CommandHandler("day3", day3))
     app.add_handler(CommandHandler("done", done_command))
     app.add_handler(CommandHandler("weight", weight))
     app.add_handler(CommandHandler("progress", progress))
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("plan", plan))
+    app.add_handler(CommandHandler("lastworkout", lastworkout))
 
-    app.add_handler(CallbackQueryHandler(done_callback, pattern=r"^done_\d+$"))
+    app.add_handler(CallbackQueryHandler(exercise_callback, pattern=r"^ex_\d+_\d+$"))
+    app.add_handler(CallbackQueryHandler(finish_workout_callback, pattern=r"^finish_\d+$"))
+    app.add_handler(CallbackQueryHandler(quickdone_callback, pattern=r"^quickdone_\d+$"))
     app.add_handler(CallbackQueryHandler(plan_callback, pattern=r"^plan_"))
+
+    # Обработка текстовых сообщений (ввод веса/повторений)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exercise_input))
 
     logger.info("Gym Tracker Bot запущен!")
     app.run_polling(drop_pending_updates=True)
