@@ -167,7 +167,8 @@ async def start(update, context):
         f"/progress — 📊 История веса\n"
         f"/history — 📋 Журнал тренировок\n"
         f"/plan — 🔄 Выбрать план\n"
-        f"/lastworkout — 📝 Последняя тренировка"
+        f"/lastworkout — 📝 Последняя тренировка\n"
+        f"/reset — 🗑 Сбросить данные"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -555,6 +556,36 @@ async def quickdone_callback(update, context):
         parse_mode="Markdown"
     )
 
+async def reset(update, context):
+    """Сброс всех данных пользователя"""
+    keyboard = [
+        [InlineKeyboardButton("🗑 Да, сбросить всё", callback_data="confirm_reset")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_reset")],
+    ]
+    await update.message.reply_text(
+        "⚠️ *Сбросить все данные?*\n\nБудут удалены:\n• Журнал тренировок\n• История веса\n• Текущая ротация",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def reset_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "cancel_reset":
+        await query.edit_message_text("👍 Отменено, данные на месте!")
+        return
+    data, uid = get_user_data(query.from_user.id)
+    plan_key = data[uid].get("plan", "dima")
+    data[uid] = {
+        "plan": plan_key,
+        "weight_log": [],
+        "workout_log": [],
+        "next_day": 1,
+        "rotation_idx": 0
+    }
+    save_data(data)
+    await query.edit_message_text("✅ *Все данные сброшены!*\nМожно начинать заново 💪", parse_mode="Markdown")
+
 # ═══════════════════════════════════════════════
 # HEALTH CHECK SERVER (для Railway)
 # ═══════════════════════════════════════════════
@@ -592,12 +623,14 @@ def main():
     app.add_handler(CommandHandler("history", history))
     app.add_handler(CommandHandler("plan", plan))
     app.add_handler(CommandHandler("lastworkout", lastworkout))
+    app.add_handler(CommandHandler("reset", reset))
 
     app.add_handler(CallbackQueryHandler(startday_callback, pattern=r"^startday_\d+$"))
     app.add_handler(CallbackQueryHandler(exercise_callback, pattern=r"^ex_\d+_\d+$"))
     app.add_handler(CallbackQueryHandler(finish_workout_callback, pattern=r"^finish_\d+$"))
     app.add_handler(CallbackQueryHandler(quickdone_callback, pattern=r"^quickdone_\d+$"))
     app.add_handler(CallbackQueryHandler(plan_callback, pattern=r"^plan_"))
+    app.add_handler(CallbackQueryHandler(reset_callback, pattern=r"^(confirm|cancel)_reset$"))
 
     # Обработка текстовых сообщений (ввод веса/повторений)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exercise_input))
